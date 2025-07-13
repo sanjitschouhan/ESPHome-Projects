@@ -1,0 +1,174 @@
+esphome:
+  name: air-quality-sensor
+  friendly_name: Air Quality Sensor
+
+esp32:
+  board: esp32dev
+  framework:
+    type: arduino
+
+wifi:
+  ssid: !secret wifi_ssid
+  password: !secret wifi_password
+
+api:
+ota:
+  platform: esphome
+
+logger:
+
+uart:
+  id: uart_bus
+  rx_pin: GPIO16
+  tx_pin: GPIO17
+  baud_rate: 9600
+
+globals:
+  - id: aqi_mode
+    type: int
+    restore_value: yes
+    initial_value: '0'  # 0 = India, 1 = US
+
+select:
+  - platform: template
+    name: "AQI Mode"
+    id: aqi_mode_select
+    optimistic: true
+    restore_value: true
+    options:
+      - "India"
+      - "US"
+    initial_option: "India"
+    on_value:
+      then:
+        - lambda: |-
+            id(aqi_mode) = (x == "India") ? 0 : 1;
+        - component.update: indoor_aqi
+        - component.update: aqi_category
+
+sensor:
+  - platform: pmsx003
+    type: PMSX003
+    uart_id: uart_bus
+    update_interval: 30s
+
+    pm_1_0:
+      name: "PM1.0 Mass"
+      id: pm_1_0
+
+    pm_2_5:
+      name: "PM2.5 Mass"
+      id: pm_2_5
+      on_value:
+        then:
+          - component.update: indoor_aqi
+
+    pm_10_0:
+      name: "PM10 Mass"
+      id: pm_10
+      on_value:
+        then:
+          - component.update: indoor_aqi
+
+  - platform: template
+    name: "AQI"
+    id: indoor_aqi
+    unit_of_measurement: "AQI"
+    device_class: aqi
+    accuracy_decimals: 0
+    lambda: |-
+      float pm25 = id(pm_2_5).state;
+      float pm10 = id(pm_10).state;
+      float aqi_pm25 = 0;
+      float aqi_pm10 = 0;
+
+      if (id(aqi_mode) == 0) {
+        // India PM2.5
+        if (pm25 <= 30.0)
+          aqi_pm25 = pm25 * 1.6667;
+        else if (pm25 <= 60.0)
+          aqi_pm25 = (pm25 - 31.0) * 1.6897 + 51.0;
+        else if (pm25 <= 90.0)
+          aqi_pm25 = (pm25 - 61.0) * 3.2967 + 101.0;
+        else if (pm25 <= 120.0)
+          aqi_pm25 = (pm25 - 91.0) * 3.3103 + 201.0;
+        else if (pm25 <= 250.0)
+          aqi_pm25 = (pm25 - 121.0) * 0.8264 + 301.0;
+        else
+          aqi_pm25 = (pm25 - 251.0) * 0.4 + 401.0;
+
+        // India PM10
+        if (pm10 <= 50.0)
+          aqi_pm10 = pm10 * 1.0;
+        else if (pm10 <= 100.0)
+          aqi_pm10 = (pm10 - 51.0) * 0.98 + 51.0;
+        else if (pm10 <= 250.0)
+          aqi_pm10 = (pm10 - 101.0) * 0.66 + 101.0;
+        else if (pm10 <= 350.0)
+          aqi_pm10 = (pm10 - 251.0) * 0.99 + 201.0;
+        else if (pm10 <= 430.0)
+          aqi_pm10 = (pm10 - 351.0) * 1.22 + 301.0;
+        else
+          aqi_pm10 = (pm10 - 431.0) * 1.25 + 401.0;
+
+      } else {
+        // US PM2.5
+        if (pm25 <= 12.0)
+          aqi_pm25 = pm25 * 4.1667;
+        else if (pm25 <= 35.4)
+          aqi_pm25 = (pm25 - 12.1) * 2.1320 + 51.0;
+        else if (pm25 <= 55.4)
+          aqi_pm25 = (pm25 - 35.5) * 2.4596 + 101.0;
+        else if (pm25 <= 150.4)
+          aqi_pm25 = (pm25 - 55.5) * 0.5236 + 151.0;
+        else if (pm25 <= 250.4)
+          aqi_pm25 = (pm25 - 150.5) * 1.0 + 201.0;
+        else if (pm25 <= 350.4)
+          aqi_pm25 = (pm25 - 250.5) * 1.0 + 301.0;
+        else
+          aqi_pm25 = (pm25 - 350.5) * 1.0 + 401.0;
+
+        // US PM10
+        if (pm10 <= 54.0)
+          aqi_pm10 = pm10 * 0.9259;
+        else if (pm10 <= 154.0)
+          aqi_pm10 = (pm10 - 55.0) * 0.49 + 51.0;
+        else if (pm10 <= 254.0)
+          aqi_pm10 = (pm10 - 155.0) * 0.49 + 101.0;
+        else if (pm10 <= 354.0)
+          aqi_pm10 = (pm10 - 255.0) * 0.49 + 151.0;
+        else if (pm10 <= 424.0)
+          aqi_pm10 = (pm10 - 355.0) * 1.41 + 201.0;
+        else if (pm10 <= 504.0)
+          aqi_pm10 = (pm10 - 425.0) * 1.25 + 301.0;
+        else
+          aqi_pm10 = (pm10 - 505.0) * 1.25 + 401.0;
+      }
+
+      return fmax(aqi_pm25, aqi_pm10);
+    on_value:
+      then:
+        - component.update: aqi_category
+
+text_sensor:
+  - platform: template
+    name: "AQI Category"
+    id: aqi_category
+    icon: mdi:air-filter
+    update_interval: never
+    lambda: |-
+      int aqi = (int) id(indoor_aqi).state;
+      if (aqi <= 50) {
+        return std::string("Good");
+      } else if (aqi <= 100) {
+        return std::string("Moderate");
+      } else if (aqi <= 150) {
+        return std::string("Unhealthy for Sensitive Groups");
+      } else if (aqi <= 200) {
+        return std::string("Unhealthy");
+      } else if (aqi <= 300) {
+        return std::string("Very Unhealthy");
+      } else {
+        return std::string("Hazardous");
+      }
+
